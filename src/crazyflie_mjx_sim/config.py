@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 
 ScenarioName = Literal["single", "multi_reach_avoid"]
+ControlMode = Literal["ctbr", "velocity_yaw_rate"]
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class CrazyflieConfig:
 
     use_motor_dynamics: bool = True
     randomize_dynamics: bool = False
+    control_mode: ControlMode = "ctbr"
     arm_length: float = 0.043
     k_eta: float = 2.3e-08
     k_m: float = 7.8e-10
@@ -42,6 +44,17 @@ class CrazyflieConfig:
     i_limit_y: float = 166.7
     body_rate_scale_xy: float = 100.0 * np.pi / 180.0
     body_rate_scale_z: float = 200.0 * np.pi / 180.0
+
+    velocity_scale_xy: float = 1.0
+    velocity_scale_z: float = 0.5
+    velocity_yaw_rate_scale: float = 200.0 * np.pi / 180.0
+    velocity_kp_xy: float = 2.0
+    velocity_kp_z: float = 4.0
+    velocity_attitude_kp: float = 4.0
+    velocity_max_accel_xy: float = 4.0
+    velocity_max_accel_z: float = 6.0
+    velocity_max_tilt: float = 30.0 * np.pi / 180.0
+    velocity_controller_epsilon: float = 1e-6
 
     k_aero_scale_min: float = 0.5
     k_aero_scale_max: float = 2.0

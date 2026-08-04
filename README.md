@@ -66,6 +66,48 @@ obs, state = env.step_rollout(jax.random.PRNGKey(2), state, actions)
 `step_rollout` computes no reward, no done flag, no contact info, and no hidden
 reset.
 
+## Control Modes
+
+The default `ctbr` mode accepts normalized collective-thrust and body-rate
+commands in the order `[thrust, roll_rate, pitch_rate, yaw_rate]`.
+
+The differentiable `velocity_yaw_rate` mode accepts normalized commands in the
+order `[forward_velocity, left_velocity, vertical_velocity, yaw_rate]`:
+
+```python
+cfg = CrazyflieConfig(
+    scenario="single",
+    control_mode="velocity_yaw_rate",
+    use_motor_dynamics=True,
+)
+env = make_env(config=cfg)
+```
+
+The same mode is available from the demo CLI:
+
+```bash
+uv run --extra cuda13 python -m crazyflie_mjx_sim.demo \
+  --scenario single \
+  --control-mode velocity_yaw_rate
+```
+
+Horizontal velocity is expressed in the yaw-aligned heading frame and vertical
+velocity is expressed along world Z. The default normalized scales are 1 m/s
+horizontal, 0.5 m/s vertical, and 200 degrees/s yaw rate. The outer velocity
+and attitude controller produces CTBR commands that continue through the
+existing body-rate PID, motor allocation, motor lag, and MJX dynamics. This
+mode requires `use_motor_dynamics=True` and remains compatible with `jax.jit`,
+`jax.vmap`, and automatic differentiation through `step_rollout`.
+
+Controller limits and gains can be tuned with `velocity_scale_xy`,
+`velocity_scale_z`, `velocity_yaw_rate_scale`, `velocity_kp_xy`,
+`velocity_kp_z`, `velocity_attitude_kp`, `velocity_max_accel_xy`,
+`velocity_max_accel_z`, and `velocity_max_tilt` on `CrazyflieConfig`.
+`step_env` exposes the generated normalized low-level command as
+`info["ctbr_action"]`. Gradients flow through the controller, motor dynamics,
+and MJX step; clipping, saturation, and contact transitions retain their usual
+piecewise-smooth boundary behavior.
+
 ## Observations
 
 `single` observation, shape `[1, 12]`:
@@ -139,6 +181,7 @@ Main scenario/runtime knobs:
 --batch-size
 --use-motor-dynamics / --no-use-motor-dynamics
 --randomize-dynamics / --no-randomize-dynamics
+--control-mode ctbr|velocity_yaw_rate
 ```
 
 Visualization and collision defaults are on. For high-throughput rollouts:

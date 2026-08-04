@@ -5,6 +5,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from crazyflie_mjx_sim import CrazyflieConfig, generate_web_report, make_env
 
@@ -58,6 +59,105 @@ def test_batched_reset_and_rollout():
         obs, state = step_batch(keys, state, action)
         assert obs.shape == (4, env.num_agents, env.obs_size)
         assert np.isfinite(np.asarray(obs)).all()
+
+
+def test_velocity_yaw_rate_control_requires_motor_dynamics():
+    with pytest.raises(ValueError, match="requires use_motor_dynamics=True"):
+        make_env(
+            "single",
+            CrazyflieConfig(
+                scenario="single",
+                control_mode="velocity_yaw_rate",
+                use_motor_dynamics=False,
+            ),
+        )
+
+
+def test_velocity_yaw_rate_control_maps_to_ctbr_and_batches():
+    env = make_env(
+        "single",
+        CrazyflieConfig(
+            scenario="single",
+            control_mode="velocity_yaw_rate",
+            disable_collisions=True,
+            disable_visualization=True,
+        ),
+    )
+    keys = jax.random.split(jax.random.PRNGKey(10), 2)
+    obs, state = jax.jit(jax.vmap(env.reset))(keys)
+    actions = jnp.asarray(
+        [
+            [[1.0, 0.0, 0.0, 0.0]],
+            [[0.0, 0.0, 0.0, 1.0]],
+        ]
+    )
+    obs, state, _, _, info = jax.jit(jax.vmap(env.step_env, in_axes=(0, 0, 0)))(
+        keys,
+        state,
+        actions,
+    )
+    ctbr = np.asarray(info["ctbr_action"])
+    assert obs.shape == (2, 1, env.obs_size)
+    assert ctbr.shape == (2, 1, 4)
+    assert ctbr[0, 0, 2] > 0.0
+    assert ctbr[1, 0, 3] > 0.0
+    assert env.metadata()["control"]["mode"] == "velocity_yaw_rate"
+
+
+def test_velocity_yaw_rate_control_is_end_to_end_differentiable():
+    env = make_env(
+        "single",
+        CrazyflieConfig(
+            scenario="single",
+            control_mode="velocity_yaw_rate",
+            disable_collisions=True,
+            disable_visualization=True,
+        ),
+    )
+    key = jax.random.PRNGKey(11)
+    _, state = env.reset(key)
+
+    def next_qvel(action):
+        _, next_state = env.step_rollout(key, state, action)
+        return next_state.data.qvel
+
+    jacobian = jax.jacfwd(next_qvel)(jnp.zeros((1, env.action_size)))
+    jacobian_np = np.asarray(jacobian)
+    assert jacobian_np.shape == (6, 1, 4)
+    assert np.isfinite(jacobian_np).all()
+    assert (np.linalg.norm(jacobian_np[:, 0, :], axis=0) > 1e-8).all()
+
+
+def test_velocity_yaw_rate_control_tracks_sustained_yaw_without_tilt_instability():
+    env = make_env(
+        "single",
+        CrazyflieConfig(
+            scenario="single",
+            horizon=1100,
+            control_mode="velocity_yaw_rate",
+            disable_collisions=True,
+            disable_visualization=True,
+        ),
+    )
+    key = jax.random.PRNGKey(12)
+    _, state = env.reset(key)
+    initial_altitude = state.data.qpos[2]
+    action = jnp.asarray([[0.0, 0.0, 0.0, 0.45]])
+
+    def scan_step(carry, _):
+        _, next_state = env.step_rollout(key, carry, action)
+        return next_state, None
+
+    final_state, _ = jax.jit(
+        lambda initial_state: jax.lax.scan(scan_step, initial_state, None, length=1100)
+    )(state)
+    yaw_rate = final_state.data.qvel[5]
+    body_z_world_z = final_state.data.xmat[env._cf_body_ids[0], 2, 2]
+
+    assert np.isfinite(np.asarray(final_state.data.qpos)).all()
+    assert np.isclose(float(yaw_rate), np.pi / 2.0, atol=0.02)
+    assert float(body_z_world_z) > np.cos(np.deg2rad(1.0))
+    assert abs(float(final_state.data.qpos[2] - initial_altitude)) < 0.01
 
 
 def test_mujoco_render_rgb():

@@ -62,6 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--use-motor-dynamics", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--randomize-dynamics", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--control-mode", choices=["ctbr", "velocity_yaw_rate"], default="ctbr")
 
     parser.add_argument("--disable-visualization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--disable-collisions", action=argparse.BooleanOptionalAction, default=False)
@@ -95,6 +96,7 @@ def _make_config(args: argparse.Namespace) -> CrazyflieConfig:
         timestep=args.timestep,
         use_motor_dynamics=args.use_motor_dynamics,
         randomize_dynamics=args.randomize_dynamics,
+        control_mode=args.control_mode,
         disable_visualization=args.disable_visualization,
         disable_collisions=args.disable_collisions,
         enable_world_bound_collisions=args.enable_world_bound_collisions,
