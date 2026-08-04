@@ -16,6 +16,7 @@ from .config import CrazyflieConfig, ScenarioName
 from .mjcf import make_cf2_scene_xml
 from .motor_dynamics import MotorDynamics, RandomizedDynamicsParams
 from .sampling import sample_non_overlapping_squares
+from .velocity_controller import VelocityYawRateController
 
 
 @struct.dataclass
@@ -53,6 +54,10 @@ class CrazyflieMJXEnv:
         self.num_agents = int(self.cfg.num_agents)
         self.num_goals = int(self.cfg.num_goals)
         self.num_obstacles = int(self.cfg.num_obstacles)
+        if self.cfg.control_mode not in {"ctbr", "velocity_yaw_rate"}:
+            raise ValueError(f"Unsupported control mode: {self.cfg.control_mode!r}")
+        if self.cfg.control_mode == "velocity_yaw_rate" and not self.cfg.use_motor_dynamics:
+            raise ValueError("velocity_yaw_rate control requires use_motor_dynamics=True")
         self.action_size = 4
         self.base_obs_size = 12
         self.obs_size = self.base_obs_size if self.scenario == "single" else (
@@ -110,6 +115,11 @@ class CrazyflieMJXEnv:
         if any(body_id < 0 for body_id in self._cf_body_ids):
             raise RuntimeError("Failed to locate every Crazyflie body in generated MJCF.")
         self.motor_dynamics = MotorDynamics(self.cfg, self.mj_model, self._cf_body_ids)
+        self.velocity_controller = VelocityYawRateController(
+            self.cfg,
+            mass=self.motor_dynamics.mass,
+            weight=self.motor_dynamics.weight,
+        )
         self._initial_motor_speeds = self.cfg.hover_motor_speed * jnp.ones((self.num_agents, 4))
         self._zero_omega = jnp.zeros((self.num_agents, 3))
         self._zero_action = jnp.zeros((self.num_agents, 4))
@@ -139,6 +149,20 @@ class CrazyflieMJXEnv:
             "num_obstacles": self.num_obstacles,
             "obs_size": self.obs_size,
             "action_size": self.action_size,
+            "control": {
+                "mode": self.cfg.control_mode,
+                "command": (
+                    "normalized_collective_thrust_and_body_rates"
+                    if self.cfg.control_mode == "ctbr"
+                    else "normalized_heading_velocity_and_yaw_rate"
+                ),
+                "velocity_scale": [
+                    self.cfg.velocity_scale_xy,
+                    self.cfg.velocity_scale_xy,
+                    self.cfg.velocity_scale_z,
+                ],
+                "yaw_rate_scale": self.cfg.velocity_yaw_rate_scale,
+            },
             "timestep": self.cfg.timestep,
             "horizon": self.cfg.horizon,
             "runtime": {
@@ -287,9 +311,14 @@ class CrazyflieMJXEnv:
         return jnp.concatenate([base, goal_local, obs_local, other_local, agent_id], axis=1)
 
     @partial(jax.jit, static_argnums=0)
-    def _apply_action_dynamics(self, state: EnvState, actions: chex.Array) -> tuple[EnvState, chex.Array]:
+    def _apply_action_dynamics(
+        self,
+        state: EnvState,
+        actions: chex.Array,
+    ) -> tuple[EnvState, chex.Array, chex.Array]:
         data0 = state.data
         normalized_actions = jnp.clip(actions, -1.0, 1.0)
+        ctbr_actions = normalized_actions
 
         if self.cfg.use_motor_dynamics:
             xmats = data0.xmat[jnp.asarray(self._cf_body_ids), :, :]
@@ -297,6 +326,12 @@ class CrazyflieMJXEnv:
             qvel = data0.qvel.reshape((self.num_agents, 6))
             body_ang_vels = jnp.einsum("bij,bj->bi", xmats_t, qvel[:, 3:6])
             body_lin_vels = jnp.einsum("bij,bj->bi", xmats_t, qvel[:, 0:3])
+            if self.cfg.control_mode == "velocity_yaw_rate":
+                ctbr_actions = jax.vmap(self.velocity_controller.command_to_ctbr)(
+                    normalized_actions,
+                    xmats,
+                    qvel[:, 0:3],
+                )
             (
                 body_thrust,
                 body_moment,
@@ -307,7 +342,7 @@ class CrazyflieMJXEnv:
                 self.motor_dynamics.forces_and_torques_from_ctbr,
                 in_axes=(0, 0, 0, 0, 0, 0, None),
             )(
-                normalized_actions,
+                ctbr_actions,
                 body_ang_vels,
                 body_lin_vels,
                 state.current_motor_speeds,
@@ -339,12 +374,12 @@ class CrazyflieMJXEnv:
             prev_omega_meas=new_meas,
             prev_action=normalized_actions,
         )
-        return new_state, normalized_actions
+        return new_state, normalized_actions, ctbr_actions
 
     @partial(jax.jit, static_argnums=0)
     def step_rollout(self, key: chex.PRNGKey, state: EnvState, actions: chex.Array) -> tuple[chex.Array, EnvState]:
         del key
-        new_state, _ = self._apply_action_dynamics(state, actions)
+        new_state, _, _ = self._apply_action_dynamics(state, actions)
         return self.obs_fn(new_state), new_state
 
     @partial(jax.jit, static_argnums=0)
@@ -355,10 +390,11 @@ class CrazyflieMJXEnv:
         actions: chex.Array,
     ) -> tuple[chex.Array, EnvState, chex.Array, chex.Array, dict[str, chex.Array]]:
         del key
-        new_state, normalized_actions = self._apply_action_dynamics(state, actions)
+        new_state, normalized_actions, ctbr_actions = self._apply_action_dynamics(state, actions)
         in_contact = self._contact_flags(new_state.data)
         new_state = new_state.replace(in_contact=in_contact)
         reward, info = self._reward_info(new_state, normalized_actions, in_contact)
+        info["ctbr_action"] = ctbr_actions
         done = new_state.step >= self.cfg.horizon
         return self.obs_fn(new_state), new_state, reward, done, info
 
