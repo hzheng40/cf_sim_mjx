@@ -288,7 +288,9 @@ class CrazyflieMJXEnv:
         qvel = data.qvel.reshape((self.num_agents, 6))
         pos = qpos[:, 0:3]
         lin_vel_body = jnp.einsum("bij,bj->bi", rotmats_t, qvel[:, 0:3])
-        ang_vel_body = jnp.einsum("bij,bj->bi", rotmats_t, qvel[:, 3:6])
+        # MuJoCo stores free-joint linear velocity in world coordinates but its
+        # angular velocity directly in the local body frame.
+        ang_vel_body = qvel[:, 3:6]
         gravity_local = jnp.einsum("bij,j->bi", rotmats_t, jnp.asarray([0.0, 0.0, -1.0]))
         base = jnp.concatenate([pos, lin_vel_body, ang_vel_body, gravity_local], axis=1)
         if self.scenario == "single":
@@ -324,7 +326,7 @@ class CrazyflieMJXEnv:
             xmats = data0.xmat[jnp.asarray(self._cf_body_ids), :, :]
             xmats_t = xmats.transpose((0, 2, 1))
             qvel = data0.qvel.reshape((self.num_agents, 6))
-            body_ang_vels = jnp.einsum("bij,bj->bi", xmats_t, qvel[:, 3:6])
+            body_ang_vels = qvel[:, 3:6]
             body_lin_vels = jnp.einsum("bij,bj->bi", xmats_t, qvel[:, 0:3])
             if self.cfg.control_mode == "velocity_yaw_rate":
                 ctbr_actions = jax.vmap(self.velocity_controller.command_to_ctbr)(

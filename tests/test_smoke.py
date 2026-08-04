@@ -128,6 +128,38 @@ def test_velocity_yaw_rate_control_is_end_to_end_differentiable():
     assert (np.linalg.norm(jacobian_np[:, 0, :], axis=0) > 1e-8).all()
 
 
+def test_velocity_yaw_rate_control_tracks_sustained_yaw_without_tilt_instability():
+    env = make_env(
+        "single",
+        CrazyflieConfig(
+            scenario="single",
+            horizon=1100,
+            control_mode="velocity_yaw_rate",
+            disable_collisions=True,
+            disable_visualization=True,
+        ),
+    )
+    key = jax.random.PRNGKey(12)
+    _, state = env.reset(key)
+    initial_altitude = state.data.qpos[2]
+    action = jnp.asarray([[0.0, 0.0, 0.0, 0.45]])
+
+    def scan_step(carry, _):
+        _, next_state = env.step_rollout(key, carry, action)
+        return next_state, None
+
+    final_state, _ = jax.jit(
+        lambda initial_state: jax.lax.scan(scan_step, initial_state, None, length=1100)
+    )(state)
+    yaw_rate = final_state.data.qvel[5]
+    body_z_world_z = final_state.data.xmat[env._cf_body_ids[0], 2, 2]
+
+    assert np.isfinite(np.asarray(final_state.data.qpos)).all()
+    assert np.isclose(float(yaw_rate), np.pi / 2.0, atol=0.02)
+    assert float(body_z_world_z) > np.cos(np.deg2rad(1.0))
+    assert abs(float(final_state.data.qpos[2] - initial_altitude)) < 0.01
+
+
 def test_mujoco_render_rgb():
     env = make_env("single", CrazyflieConfig(scenario="single", horizon=5))
     try:
