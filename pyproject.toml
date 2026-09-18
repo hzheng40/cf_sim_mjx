@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda13 = ["jax[cuda13]>=0.8.0"]
+train = ["brax>=0.14.2,<0.15", "jax>=0.8.0,<0.10", "mediapy>=1.2.0", "matplotlib>=3.9.0", "imageio-ffmpeg>=0.6.0"]
 
 [dependency-groups]
 dev = ["pytest>=8.0.0"]

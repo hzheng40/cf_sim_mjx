@@ -2,8 +2,8 @@
 
 Minimal Crazyflie simulation environments built on MuJoCo MJX. This repo keeps
 the Crazyflie dynamics, batched MJX stepping, collision toggles, and browser
-rendering pieces, but intentionally excludes STL specs, policy optimization,
-training scripts, W&B, notebooks, and non-Crazyflie environments.
+rendering pieces, with an optional Brax PPO hover example. The core simulator
+excludes STL specs, W&B, and non-Crazyflie environments.
 
 ## Included Scenarios
 
@@ -24,6 +24,42 @@ uv sync
 
 The minimal dependency set is JAX, MuJoCo/MJX, NumPy, Flax structs, Chex, and
 Pillow for image examples. No training libraries are required.
+
+### Optional PPO hover training
+
+`examples/train_hover_ppo.ipynb` includes training, reward plots, checkpoint
+loading, rendered policy evaluation, and position traces. Select the repository's
+uv Python environment as your notebook kernel (install `ipykernel` there if your
+editor requires it). The equivalent command-line workflow is:
+
+```bash
+uv sync --extra cuda13 --extra train
+CUDA_VISIBLE_DEVICES=0 JAX_PLATFORMS=cuda uv run --extra cuda13 --extra train \
+  python examples/train_hover_ppo.py --steps 2000000
+```
+
+The example uses CTBR actions and motor dynamics. A Brax adapter adds a hover
+target at `(0, 0, 0.6)` m, target-relative observations, tracking/upright rewards,
+and crash termination. Brax supplies batching, episode limits, and auto-reset of
+the complete motor/PID/simulator state. Actions are held for five 2 ms steps.
+Training uses collision-free dynamics; it is not a collision-avoidance task.
+
+Outputs under `artifacts/hover_ppo` include `params.pkl`, `metrics.json`,
+`rollout.mp4`, and positions/rewards in `rollout.npz`. The extra supplies an
+FFmpeg binary for encoding; rendering uses MuJoCo EGL. Add `--smoke` for a short pipeline
+check (not a converged policy), or `--no-render` for training alone. Pass
+`--checkpoint artifacts/hover_ppo/params.pkl` to evaluate without retraining.
+Only load trusted checkpoints. Inspect evaluation returns and trajectories
+before treating a policy as successfully trained.
+
+The training extra constrains JAX to `<0.10` for Brax 0.14 compatibility.
+The example uses one JAX device; select it with `CUDA_VISIBLE_DEVICES`.
+For a CPU smoke check with software EGL rendering:
+
+```bash
+JAX_PLATFORMS=cpu EGL_PLATFORM=surfaceless uv run --extra train \
+  python examples/train_hover_ppo.py --smoke --output artifacts/hover_ppo_smoke
+```
 
 For GPU machines, install a CUDA-enabled JAX extra that matches the local driver.
 For example:
